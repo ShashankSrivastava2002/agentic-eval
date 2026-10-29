@@ -1,6 +1,6 @@
 # Voice Agent Evals: Pipeline + Pre-built Datasets
 
-Researched 2026-10-28. Verification level per source:
+Researched 2026-10-28, re-checked against primary sources 2026-10-29. Verification level per source:
 - **[V]** = I opened the primary page (repo / HF dataset / arXiv abstract) and confirmed the details.
 - **[S]** = Confirmed from search results that point at the primary source (arXiv/ICML/GitHub), but I did not open the page.
 - **[Vendor]** = Vendor blog. The numbers are opinions/rules of thumb, not standards.
@@ -14,18 +14,18 @@ Speech-to-speech models (gpt-realtime, Gemini Live) collapse the middle, but the
 
 ### Layer 0: Build the test set
 - Use real recorded user audio from your domain (accents, noise, domain terms), not only TTS-generated prompts.
-  Proof: the tool-calling paper below found that ASR artifacts, prosody shifts and channel noise make voice runs diverge from text runs.
-  It treats TTS-synthesized audio as a first-stage proxy, not a substitute.
-  [S] https://arxiv.org/pdf/2605.15104
+  Evidence: a text-to-voice tool-calling study (TTS + speaker variation + noise over Confetti / When2Call) found a 1.8-4.8 point text-to-voice gap, mostly from misheard argument values.
+  The authors position TTS-converted audio as a first-stage diagnostic that complements purpose-built audio corpora, not a substitute.
+  [V] https://arxiv.org/abs/2605.15104
 - Add perturbations: noise (MUSAN, DNS Challenge), accents, and caller behaviours (interrupting, rambling, hesitating).
 
 ### Layer 1: Component evals (each stage alone)
 | Stage | Metric | How | Source |
 |---|---|---|---|
-| STT | WER = (S + D + I) / N | Normalize the text, then compute with `jiwer`. Run it on your own audio. | Open ASR Leaderboard paper argues no single dataset or metric is enough [S] https://arxiv.org/abs/2510.06961 |
-| STT | RTFx (speed) | Audio seconds / compute seconds | same |
+| STT | WER = (S + D + I) / N | Normalize the text, then compute with `jiwer`. Run it on your own audio. | Open ASR Leaderboard standardizes WER + RTFx across 86 systems and 12 datasets [V] https://arxiv.org/abs/2510.06961 |
+| STT | RTFx (inverse real-time factor, speed) | Audio seconds / processing seconds | same |
 | LLM | Task / tool-call accuracy, faithfulness | Evaluate on text transcripts first (cheap) | |
-| TTS | Intelligibility WER, speaker similarity (SIM), naturalness (UTMOS / NISQA / MOS) | Seed-TTS-eval: Whisper-large-v3 ASR -> WER; WavLM-large speaker-verification embedding -> cosine SIM | [S] https://github.com/BytedanceSpeech/seed-tts-eval |
+| TTS | Intelligibility WER, speaker similarity (SIM), naturalness (UTMOS / NISQA / MOS) | Seed-TTS-eval: Whisper-large-v3 (EN) / Paraformer-zh (ZH) ASR -> WER; WavLM-large speaker-verification embedding -> cosine SIM | [V] https://github.com/BytedanceSpeech/seed-tts-eval |
 | Latency | STT final, LLM TTFT, TTS TTFB | Timestamp each stage | Vendor targets: STT <200ms, LLM TTFT <400ms, TTS TTFB <150ms [Vendor] https://hamming.ai/resources/how-to-evaluate-voice-agents-2026 |
 
 ### Layer 2: Turn-level / conversational dynamics
@@ -63,37 +63,37 @@ Speech-to-speech models (gpt-realtime, Gemini Live) collapse the middle, but the
 ### End-to-end voice agents (tool use, tasks)
 | Name | What it tests | Size / details | Links |
 |---|---|---|---|
-| **τ-Voice** (Sierra et al., ICML 2026) | Full-duplex voice agents on τ²-bench tasks (Retail, Airline, Telecom), clean vs. realistic audio (noise, accents) | 278 tasks. Abstract: GPT-5 text ~80% vs. voice agents 29-42% clean, 19-30% realistic | [S] https://arxiv.org/abs/2603.13686 · https://proceedings.mlr.press/v306/ray26a.html |
-| **EVA-Bench / ServiceNow EVA** (EMNLP 2026 Findings) | Bot-to-bot full conversations in enterprise domains, accent/noise perturbations, pass^k | 213 scenarios. Airline, Healthcare HR, IT service management. Metrics EVA-A (accuracy) + EVA-X (experience) | [V] https://arxiv.org/abs/2605.13841 · https://github.com/ServiceNow/eva |
-| **Full-Duplex-Bench v3** | Tool use under real human disfluencies (chained API calls) | All real human audio, 5 disfluency types, 4 domains | [S] https://arxiv.org/abs/2604.04847 |
+| **τ-Voice** (Ray, Dhandhania, Barres, Narasimhan; ICML 2026, PMLR 306) | Full-duplex voice agents on τ²-bench tasks (Retail, Airline, Telecom), clean vs. realistic audio (noise, accents) | 278 tasks, pass@1. Abstract: GPT-5 (reasoning, text) 85% vs. voice agents 31-51% clean, 26-38% realistic (30-45% of text capability). 79-90% of failures attributed to agent behaviour | [V] https://arxiv.org/abs/2603.13686 · https://proceedings.mlr.press/v306/ray26a.html |
+| **EVA-Bench / ServiceNow EVA** (EMNLP 2026) | Bot-to-bot full conversations in enterprise domains, accent/noise/connection-degradation perturbations, pass@1 / pass@k / pass^k | 213 scenarios. Airline CSM, Healthcare HRSD, ITSM. EVA-A (task completion, faithfulness, speech fidelity) + EVA-X (turn-taking, conciseness, conversation progression). 12 systems evaluated | [V] https://arxiv.org/abs/2605.13841 · https://github.com/ServiceNow/eva |
+| **Full-Duplex-Bench v3** | Tool use under real human disfluencies (chained API calls) | All real human audio, 5 disfluency types (fillers, pauses, hesitations, false starts, self-corrections), 4 domains. 6 systems incl. a cascaded baseline. Code + data released 2026-05 | [V] https://arxiv.org/abs/2604.04847 |
 
 ### Conversational dynamics
 | Name | What it tests | Links |
 |---|---|---|
-| **Full-Duplex-Bench** (v1, ASRU 2025; v1.5, v2) | Pause handling, backchanneling, turn-taking, interruption, with automatic metrics | [S] https://arxiv.org/abs/2503.04721 · https://github.com/DanielLin94144/Full-Duplex-Bench |
+| **Full-Duplex-Bench** (v1, v1.5, v2) | v1: pause handling, backchanneling, smooth turn-taking, user interruption (static, automatic metrics). v1.5: overlap (backchannel, side conversation, ambient speech). v2: live multi-turn with an automated LLM examiner | [V] https://arxiv.org/abs/2503.04721 · https://arxiv.org/abs/2507.23159 · https://arxiv.org/abs/2510.07838 · https://github.com/DanielLin94144/Full-Duplex-Bench |
 
 ### Spoken-input understanding / assistant quality
 | Name | What it tests | Size / details | Links |
 |---|---|---|---|
 | **VoiceBench** (TACL 2026) | LLM voice assistants: open QA, MCQ, instruction following (IFEval), reasoning (BBH), safety (AdvBench) | 11 subsets. Mix of Google-TTS and human audio (e.g. wildvoice: 1,000 human). gpt-4o-mini judge for open-ended subsets | [V] https://arxiv.org/abs/2410.17196 · https://github.com/MatthewCYM/VoiceBench · https://huggingface.co/datasets/hlt-lab/voicebench |
-| **Big Bench Audio** (Artificial Analysis) | Audio reasoning (4 BBH categories) | 1,000 questions, synthetic voices from 23 configs (OpenAI/Azure/Polly), MIT license | [V] https://huggingface.co/datasets/ArtificialAnalysis/big_bench_audio |
+| **Big Bench Audio** (Artificial Analysis) | Audio reasoning (4 BBH categories) | 1,000 questions (250 per category), English only, synthetic voices from 23 configs (OpenAI/Azure/AWS Polly), mostly US/UK accents, MIT license | [V] https://huggingface.co/datasets/ArtificialAnalysis/big_bench_audio |
 | **SLURP** (EMNLP 2020) | Spoken language understanding: intent + entity from audio | ~72k recordings, 18 domains, SLU-F1 metric | [S] https://arxiv.org/abs/2011.13205 · https://github.com/pswietojanski/slurp |
 
 ### STT (ASR) component
 | Name | Notes | Links |
 |---|---|---|
-| **Open ASR Leaderboard** (HF) | WER + RTFx across LibriSpeech, GigaSpeech, VoxPopuli, TED-LIUM, SPGISpeech, AMI, etc. Multilingual + long-form | [S] https://arxiv.org/abs/2510.06961 · https://huggingface.co/spaces/hf-audio/open_asr_leaderboard · https://github.com/huggingface/open_asr_leaderboard |
+| **Open ASR Leaderboard** (HF) | WER + RTFx across LibriSpeech, GigaSpeech, VoxPopuli, TED-LIUM, SPGISpeech, AMI, etc. 86 systems, 12 datasets; English short- + long-form and multilingual short-form tracks | [V] https://arxiv.org/abs/2510.06961 · https://huggingface.co/spaces/hf-audio/open_asr_leaderboard · https://github.com/huggingface/open_asr_leaderboard |
 
 ### TTS component
 | Name | Notes | Links |
 |---|---|---|
-| **Seed-TTS-eval** (ByteDance) | Test lists (EN, ZH, ZH-hard) + `cal_wer.sh` / `cal_sim.sh`. UTMOS is not included, so add it separately | [S] https://github.com/BytedanceSpeech/seed-tts-eval |
+| **Seed-TTS-eval** (ByteDance) | Zero-shot TTS test lists (EN: 1,000 Common Voice; ZH: 2,000 DiDiSpeech-2; ZH-hard) plus voice-conversion lists, with `cal_wer.sh` / `cal_sim.sh`. Only WER + SIM; UTMOS is not included, so add it separately | [V] https://github.com/BytedanceSpeech/seed-tts-eval |
 
 ### Noise for robustness perturbation
 | Name | Notes | Links |
 |---|---|---|
-| **MUSAN** | Music, speech (12 languages), noise (~6h, 929 files). CC license | [S] https://arxiv.org/abs/1510.08484 · https://www.openslr.org/17/ |
-| **Microsoft DNS Challenge** | ~180h noise, 150 categories | [S] https://github.com/microsoft/DNS-Challenge |
+| **MUSAN** | Music, speech (12 languages), noise (~6h, 929 files). CC BY 4.0 | [V] license/languages, [S] noise size · https://arxiv.org/abs/1510.08484 · https://www.openslr.org/17/ |
+| **Microsoft DNS Challenge** | ~180h noise, 150 categories. Repo `main` is now DNS5 (ICASSP 2023); check which edition's noise set you download | [S] https://github.com/microsoft/DNS-Challenge |
 
 ---
 
@@ -104,5 +104,5 @@ Speech-to-speech models (gpt-realtime, Gemini Live) collapse the middle, but the
 
 ## 4. Caveats
 - Latency/WER thresholds from Hamming and Telnyx are vendor rules of thumb and differ between sources. Calibrate on your own traffic.
-- Numbers in the τ-Voice abstract differ from a third-party review of it. Cite the paper directly.
+- Third-party summaries of τ-Voice quote different numbers than the paper. Cite the ICML/arXiv abstract directly (figures above are from it).
 - Most "agent" benchmarks are from 2026 and are moving fast. Check the repo before relying on dataset contents.
