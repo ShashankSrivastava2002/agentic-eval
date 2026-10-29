@@ -7,6 +7,75 @@ Researched 2026-10-28, re-checked against primary sources 2026-10-29. Verificati
 
 ---
 
+## 0. Glossary: formulas and symbols
+
+### WER (Word Error Rate)
+`WER = (S + D + I) / N`
+
+Align the system's transcript (hypothesis) against the correct transcript (reference) word by word, using the minimum number of edits (Levenshtein alignment). Then count:
+- **S** (substitutions): a reference word replaced by a different word.
+- **D** (deletions): a reference word that is missing from the hypothesis.
+- **I** (insertions): an extra word in the hypothesis that is not in the reference.
+- **N**: the total number of words in the reference.
+
+Example:
+```
+Reference:  book  a  flight  to  boston          (N = 5)
+Hypothesis: book     flight  to  austin  please
+                 D                S       I
+WER = (1 + 1 + 1) / 5 = 0.60 = 60%
+```
+Lower is better. 0% means a perfect match. WER can go above 100%, because insertions are not capped by N.
+Normalize both texts first (lowercase, strip punctuation, map "10" vs "ten" the same way), or formatting differences get counted as errors.
+
+### RTFx (inverse Real-Time Factor)
+`RTFx = audio duration (seconds) / processing time (seconds)`
+
+This measures speed. Higher is faster. RTFx = 100 means one hour of audio is transcribed in 36 seconds. RTFx < 1 means the system is slower than real time.
+
+### SIM (speaker similarity)
+`SIM = cos(a, b) = (a · b) / (|a| × |b|)`
+- **a**: speaker embedding (a vector describing the voice) of the generated TTS audio.
+- **b**: speaker embedding of the reference voice clip.
+- **a · b**: dot product. **|a|**, **|b|**: vector lengths.
+
+The range is -1 to 1. Closer to 1 means the generated voice sounds more like the reference speaker.
+
+### MOS and predicted MOS
+- **MOS** (Mean Opinion Score): humans rate audio quality from 1 (bad) to 5 (excellent), and you average the ratings.
+- **UTMOS**, **NISQA**: neural models that predict MOS without human listeners. They are cheaper, but only approximate human ratings.
+
+### pass@1, pass@k, pass^k
+Run the same scenario k times.
+- **pass@1**: the success rate of a single run (averaged over runs).
+- **pass@k**: the share of scenarios where *at least one* of the k runs succeeds. This is "peak" capability.
+- **pass^k**: the share of scenarios where *all* k runs succeed. This is "reliable" capability.
+
+Example with k = 4, where a scenario succeeds in 3 of 4 runs: pass@k counts it as a success, and pass^k counts it as a failure.
+A large pass@k - pass^k gap means the agent can do the task but does it inconsistently.
+
+### Latency terms
+- **TTFT** (Time To First Token): time from sending the prompt to the LLM until it returns its first token.
+- **TTFB** (Time To First Byte): time from sending text to the TTS until the first audio bytes come back.
+- **STT final**: time from the end of user speech until the STT emits its final (not interim) transcript.
+- **P50 / P95**: percentiles. P50 (median) means half of the turns are faster than this value. P95 means 95% are faster, so it captures the slow tail that users notice.
+
+### Other abbreviations
+| Term | Meaning |
+|---|---|
+| VAD | Voice Activity Detection: detects when someone is speaking |
+| STT / ASR | Speech-to-Text / Automatic Speech Recognition (same thing) |
+| LLM | Large Language Model |
+| TTS | Text-to-Speech |
+| Barge-in | The user starts talking while the agent is speaking, and the agent should stop |
+| Backchannel | Short listener sounds ("mm-hm", "yeah") that are not a request to take the turn |
+| Full-duplex | The system can listen and speak at the same time (vs. half-duplex: strict turns) |
+| Cascade | Separate STT -> LLM -> TTS models (vs. speech-to-speech: one audio-native model) |
+| SLU-F1 | SLURP's F1 score for entity extraction from speech. F1 = 2 × precision × recall / (precision + recall) |
+| EVA-A / EVA-X | EVA's composite Accuracy score / Experience score |
+
+---
+
 ## 1. The pipeline
 
 A cascaded voice agent is `Audio in -> VAD/turn detection -> STT -> LLM (+tools) -> TTS -> Audio out`.
@@ -22,7 +91,7 @@ Speech-to-speech models (gpt-realtime, Gemini Live) collapse the middle, but the
 ### Layer 1: Component evals (each stage alone)
 | Stage | Metric | How | Source |
 |---|---|---|---|
-| STT | WER = (S + D + I) / N | Normalize the text, then compute with `jiwer`. Run it on your own audio. | Open ASR Leaderboard standardizes WER + RTFx across 86 systems and 12 datasets [V] https://arxiv.org/abs/2510.06961 |
+| STT | WER = (S + D + I) / N (symbols in §0) | Normalize the text, then compute with `jiwer`. Run it on your own audio. | Open ASR Leaderboard standardizes WER + RTFx across 86 systems and 12 datasets [V] https://arxiv.org/abs/2510.06961 |
 | STT | RTFx (inverse real-time factor, speed) | Audio seconds / processing seconds | same |
 | LLM | Task / tool-call accuracy, faithfulness | Evaluate on text transcripts first (cheap) | |
 | TTS | Intelligibility WER, speaker similarity (SIM), naturalness (UTMOS / NISQA / MOS) | Seed-TTS-eval: Whisper-large-v3 (EN) / Paraformer-zh (ZH) ASR -> WER; WavLM-large speaker-verification embedding -> cosine SIM | [V] https://github.com/BytedanceSpeech/seed-tts-eval |
