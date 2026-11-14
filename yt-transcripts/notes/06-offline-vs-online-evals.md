@@ -1,141 +1,277 @@
-# 06 — Offline Evals vs Online Evals
+# Lecture 6 — Offline Evals vs Online Evals
 
-> Source: [Offline Evals Vs Online Evals](https://www.youtube.com/watch?v=SahaDGzN-Bk) (CampusX). Notes are based only on the video transcript.
-
-## TL;DR
-- **Offline evals** run **before deployment** on a **golden dataset** with an answer key. They check whether the app **works correctly**.
-- **Online evals** run **after deployment** on **live traffic** with **no answer key**. They check whether the app is **running normally** in production.
-- They are **complementary, not rivals**. Production failures are fed back into the offline dataset, which forms a **self-improving loop**.
-- Online pipeline: **log → (sample → evaluate) → dashboard → alert**.
+> **Source lecture:** [Offline Evals Vs Online Evals](https://www.youtube.com/watch?v=SahaDGzN-Bk) (CampusX)
+> **What this note adds:** diagrams of CI gating and the online pipeline, types of drift, how stratified sampling works, and how LangSmith automation rules actually filter and sample (🔎 *Beyond the lecture*). Corrections are marked ✏️.
 
 ---
 
-## Course recap
-1. Why we need evals
-2. What evals are: model evals vs application evals
-3. What an eval pipeline looks like
-4. Why one app needs **multiple** eval pipelines: failure points (component, workflow, application) and risk categories (quality, safety, operations)
-5. Eval methods: programmatic, human, LLM-as-a-judge
+## 1. The two kinds of evaluation in one picture
 
-## Offline evals
-> Any eval pipeline you run on an LLM application **before deploying it**.
+```mermaid
+flowchart LR
+    subgraph OFF[Offline: BEFORE deployment]
+        GD[(Golden dataset with answer key)] --> EV1[Run eval suite]
+        EV1 --> GATE{Score ≥ threshold?}
+    end
+    GATE -->|Yes| DEP[Deploy]
+    GATE -->|No| FIX[Fix and retry]
+    subgraph ON[Online: AFTER deployment]
+        DEP --> TR[Live user traffic]
+        TR --> LOG[(Logs / traces)]
+        LOG --> EV2[Reference-free evaluators + signals]
+        EV2 --> DASH[Dashboards and alerts]
+    end
+    DASH -->|bad cases| GD
+```
 
-Everything studied so far (the email router, the retriever's Recall@k, the UPSC grader) is offline evaluation.
+> **Offline evals check whether the app works *correctly*. Online evals check whether it's running *normally* in production.**
 
-### Three benefits
-1. **Pre-release testing and release gating**
-   - Automate it with **CI/CD**: push code to Git, **GitHub Actions** runs the eval script, and you get a score.
-   - Score ≥ threshold (e.g. 95%): deploy automatically. Below the threshold: notify and/or roll back.
-2. **Version comparison**
-   - Same eval and same golden dataset give a level playing field.
-   - Compare models (Claude vs OpenAI), prompts, rerankers, vector DBs or whole architectures.
-3. **Regression testing**
-   - **Regression** = improving one thing breaks something else.
-   - Example: the CampusX chatbot was cold about refunds, so the prompt was changed to "be very kind and polite". Now it softens facts and says the Insider plan is "around ₹19,000" instead of ₹19,500.
-   - Fix: the golden dataset covers **all question types** (refunds, pricing, curriculum, …). Track scores **per category**. If refund accuracy was 90% it should stay ~90%; a drop to 80% means regression, so don't ship the change.
+They are **partners, not rivals**. You always need both.
 
-## Why offline isn't enough: three production risks
-1. **Unanticipated inputs.** The golden set has 200–500 anticipated questions, but the real world sends Hindi–English mix, ambiguous half-questions, angry rants, adversarial **prompt injections** and edge cases.
-2. **Emergent or systematic failures that only appear at scale**
-   - Latency spikes with thousands of concurrent users (e.g. after a course launch). This can't be tested offline.
-   - **Subtle bias** that is only visible across thousands of conversations (e.g. worse treatment of non-technical users).
-3. **Drift.** The business changes (prices, curricula, policies), so the documents change and the data distribution shifts. The golden dataset, built for "today", becomes **obsolete**. Offline scores stay good while users give negative feedback.
+---
 
-> Offline evals need a golden dataset with correct answers. In production there is no golden dataset and no answer key, so offline evals can't cover these risks.
+## 2. Offline evals
 
-## Online evals
-> "Online eval is evaluating your system on **live production traffic after deployment**, as real users interact with it."
+### Definition
+> Any evaluation you run on your LLM app **before deploying it**, using a fixed **golden dataset** (usually with an answer key).
 
-The key property is that **it works without an answer key or golden dataset**.
+Everything in lectures 3–5 (email router, Recall@k, UPSC grader) was offline evaluation.
 
-### Offline vs online
+### Benefit 1: pre-release testing and release gates
+You can automate the go/no-go decision with **CI/CD**:
+- **Continuous Integration (CI)**: automatically test every code change.
+- **Continuous Deployment (CD)**: automatically release it if the tests pass.
+
+```mermaid
+flowchart LR
+    A[Developer pushes code to Git] --> B[GitHub Actions starts]
+    B --> C[Run eval script on golden set]
+    C --> D{Score ≥ e.g. 95%?}
+    D -->|Yes| E[Auto-deploy]
+    D -->|No| F[Block, notify team, keep old version]
+```
+
+> 💡 **Analogy:** a factory quality gate. Every product passes inspection before it leaves the factory.
+
+### Benefit 2: version comparison
+Same eval + same dataset = a **level playing field**. You can compare:
+- Claude vs OpenAI models
+- prompt A vs prompt B
+- reranker X vs Y
+- vector database A vs B
+- whole architectures
+
+### Benefit 3: regression testing
+**Regression** = a change improves one thing but **breaks something else**.
+
+*Lecture example:* the CampusX chatbot sounded cold about refunds, so someone added "be very kind and polite" to the prompt. Now it's *too* soft and, to please users, says the Insider plan costs "around ₹19,000" instead of the true **₹19,500**. Tone improved; factual accuracy **regressed**.
+
+**How offline evals catch it:**
+- Make sure the golden set covers **every question type** (refunds, pricing, curriculum, …).
+- Track scores **per category**:
+
+| Category | Before | After prompt change | Verdict |
+|---|---|---|---|
+| Refund tone | 70% | 90% | ✅ Improved |
+| Pricing accuracy | 90% | **80%** | ❌ Regression, so don't ship |
+
+---
+
+## 3. Why offline evals aren't enough: three production risks
+
+| Risk | What happens | Example |
+|---|---|---|
+| **1. Unanticipated inputs** | Real users send things your 200–500 test questions never covered | Hinglish (Hindi + English), half-questions, angry rants, prompt injection attacks |
+| **2. Emergent / systematic failures** | Problems that only appear **at scale** | Latency spikes when thousands of users arrive after a course launch. **Subtle bias** visible only across thousands of chats (e.g. worse answers for non-technical users). |
+| **3. Drift** | The world changes and your test set becomes outdated | Prices, curricula and policies change, so the knowledge base changes, but the golden dataset still reflects last year. Offline scores look great; users complain. |
+
+🔎 *Beyond the lecture: kinds of drift*
+
+| Type | Meaning | Chatbot example |
+|---|---|---|
+| **Data (input) drift** | The *kind* of questions users ask changes | After a new course launches, most questions are about it |
+| **Concept drift** | The *right answer* to the same question changes | "What's the fee?" had one correct answer last year and a different one now |
+| **Model drift** | The LLM provider updates the model behind the same API name | Same prompt, slightly different behaviour |
+
+> Offline evals need a golden dataset with correct answers. In production, new questions **have no answer key**, so offline evals alone can't cover these risks.
+
+---
+
+## 4. Online evals
+
+### Definition
+> **Online evaluation** = evaluating your system on **live production traffic after deployment**, as real users interact with it.
+
+**The key property:** it works **without an answer key / golden dataset**.
+
+### Offline vs online comparison
 
 | | Offline | Online |
 |---|---|---|
 | When | Before deployment | After deployment, continuously |
-| Data | Fixed **golden dataset** | **Live production traffic** |
-| Answer key | Usually yes | **No**. Quality must be estimated on the go. |
+| Data | Fixed golden dataset | Live traffic |
+| Answer key | Usually yes | **No** |
 | Inputs | Only what you **anticipated** | **Anything** |
 | Catches | **Regressions** | **Drift**, surprises, emergent bugs |
-| Best for | **Gating**, version comparison, CI | **Drift detection**, real-world performance |
-| Cost/speed | Fast, cheap, repeatable (small dataset) | Can be costly at scale, so use **sampling** (e.g. ~1,000 of 50,000 daily conversations) |
+| Best for | Release gating, version comparison, CI | Drift detection, real-world health |
+| Cost and speed | Fast, cheap, repeatable | Can be expensive at scale, so you **sample** |
 
-> **Offline evals tell you whether your app works *correctly*. Online evals tell you whether it's running *normally* in production.**
-
-### Correctness vs normality (UPSC grader example)
-- **Offline**, correctness = how close the grader's marks are to the **human's** marks (the human marks are in the golden set).
-- **Online**, no human ever graded the new answer, so **correctness can't be measured**.
-- What you *can* measure is **normality**: plot the **weekly distribution of scores** and use past weeks as the **baseline**. If one week suddenly shifts (most scores now ~800 instead of ~500), that **triggers an investigation**.
-- It could be a real trend (e.g. stronger students that week), but you are alerted to look.
-
-### How to estimate quality without an answer key
-- **Metrics that don't need a correct answer**, e.g. **faithfulness**: give an LLM the retrieved context and the generated answer and ask whether the answer came from the context.
-- **Workarounds / proxies** when correctness needs an answer key:
-  - Baseline **distribution comparison** (UPSC)
-  - **User feedback** (thumbs up/down) as a proxy for correctness. A surge of thumbs-down in the last hour means something is wrong.
+✏️ *Correction:* the lecture's sampling example mixes "500" and "50,000" conversations a day. The intended example is **sampling about 1,000 out of 50,000 daily conversations** (you can't sample 1,000 from 500).
 
 ---
 
-## The online eval pipeline
+## 5. Correctness vs normality (the core idea)
 
-### Step 1: logging
-> "Capture a structured, replayable record of every conversation turn."
+**UPSC grader example:**
+- **Offline**, we measured **correctness**: how close the LLM's marks were to the **human expert's** marks.
+- **Online**, a brand-new student answer has **never been graded by a human**, so correctness **can't be measured**.
+- We **can** measure **normality**: is the grader behaving like it usually does?
 
-What to log per conversation and turn:
-- **IDs:** conversation ID, turn ID, user ID, session ID, timestamp
-- **Content:** user question, **retrieved context** (RAG), model output
-- **Operational:** latency (ms), prompt tokens, completion tokens, total cost, errors and status codes
-- **Behavioural signals:** thumbs up/down, escalations ("connect me to a human", emailing support), repeated or rephrased questions
+**How:** plot the **distribution of scores** each week and compare with past weeks (the **baseline**).
 
-Tool: **LangSmith** (projects contain traces with inputs, outputs and metadata).
+```
+Weeks 1–4 (baseline)          Week 5 (alert!)
+count                          count
+ |    ▆█▆                        |          ▆█▆
+ |  ▃█████▃                      |        ▃█████▃
+ |▁███████████▁                  |      ▁███████████▁
+ +-------------- marks           +-------------- marks
+  200  500  700                    200  500   800
+```
 
-Engineering properties of good logging:
-1. **Non-blocking.** Logging must not add latency to the conversation.
-2. **Durable and queryable.** Structured storage in a data warehouse or observability tool, fetchable later.
-3. **Late-signal attachment.** Signals that arrive later (e.g. a support email the next day) are linked back via the **conversation ID**.
-4. **PII handling.** **Mask** personal data (phone, card number, address, date of birth, Aadhaar) before storing. **PII = Personally Identifiable Information.**
+The scores suddenly moved up. Either the students got smarter, or the **grader broke**. Either way, you **investigate**.
 
-### Step 2: know your signals
+> Online evals usually can't prove correctness. They tell you whether **something changed**, which is your cue to look.
+
+### Estimating quality without an answer key
+1. **Use reference-free metrics.** *Example:* **faithfulness** needs only the retrieved context and the answer. Ask an LLM: "Is this answer supported by this context?"
+2. **Use proxy signals.** *Example:* a **thumbs-up/thumbs-down** button. A spike in thumbs-down in the last hour probably means correctness has dropped.
+3. **Compare against a baseline distribution** (the UPSC example above).
+
+---
+
+## 6. The online evaluation pipeline
+
+### Step 1: Logging (the foundation)
+> "Capture a **structured, replayable** record of every conversation turn."
+
+If you don't record it, you can't evaluate it.
+
+**What to log:**
+
+| Group | Fields |
+|---|---|
+| IDs | conversation ID, turn ID, user ID, session ID, timestamp |
+| Content | user question, **retrieved context**, model output |
+| Operations | latency (ms), prompt tokens, completion tokens, total cost, errors and status codes |
+| Behaviour | thumbs up/down, escalation ("connect me to a human"), repeated or rephrased questions |
+
+**Tool example:** **LangSmith** (stores traces with inputs, outputs and metadata).
+
+**Four properties of good logging:**
+1. **Non-blocking**: logging runs in the background and must not slow down replies.
+2. **Durable and queryable**: stored safely in a structured way so you can search it later (a data warehouse or observability tool).
+3. **Late-signal attachment**: signals that arrive later (e.g. a complaint email the next day) are linked back via the **conversation ID**.
+4. **PII handling**: **mask** personal data before storing it (phone, card number, address, date of birth, Aadhaar) so employees can't read it later. **PII = Personally Identifiable Information.**
+
+### Step 2: Know your signals
 
 | Type | Meaning | Examples |
 |---|---|---|
-| **Captured** | Already available. Just store it. | Thumbs up/down, latency, cost per conversation, token usage |
-| **Computed** | Must be calculated by an **online evaluator** | Faithfulness, answer relevance, correctness, hallucination, toxicity, bias/fairness |
+| **Captured** | Already available; just store it | Thumbs up/down, latency, cost, token count |
+| **Computed** | Must be calculated by an **online evaluator** | Faithfulness, answer relevance, hallucination, toxicity, bias |
 
-### Pipeline for captured signals
-**Log → dashboard → alert**
-- **Dashboard:** view **aggregated** values over time windows (last 1 h, 24 h, week, 6 months). A single conversation's value doesn't matter; the trend does.
-  - Example: a course launch brings 500 users at once, latency climbs, so add capacity (more EC2 instances, load balancers on AWS).
-- **Alerting:** nobody watches graphs 24/7. Alert when a metric crosses a threshold (e.g. latency > 4 s) via Slack, email, PagerDuty, Dynatrace or a custom API.
-- LangSmith has **Monitoring** (trace latency, error rate, LLM call count, LLM latency, cost) and **Alerts** (metric + threshold + window, e.g. last 5 minutes).
+### Pipeline A: captured signals
 
-### Pipeline for computed signals
-**Log → sample → evaluate → dashboard → alert**
+```mermaid
+flowchart LR
+    L[(Logs)] --> D[Dashboard: aggregated over 1h / 24h / 7d]
+    D --> A{Crosses threshold?}
+    A -->|Yes| N[Alert via Slack / email / PagerDuty]
+```
 
-Example: detecting **hallucination** in real time.
-1. **Log** all conversations (e.g. 50,000 a day).
-2. **Sample.** Running an LLM judge on everything would more than double cost.
-   - Random sampling (e.g. 1,000 of 50,000) works, but **stratified sampling** is better: divide conversations into categories and **oversample risky ones**, such as thumbs-down, abrupt endings, escalations, repeated or rephrased questions, and money topics (refunds, admissions, fees). Thumbs-up conversations are low value.
-   - Categorising may itself need a small model (clustering).
-3. **Evaluate** with a **reference-free LLM-as-a-judge**: a stronger LLM gets the context, question, output and a detailed rubric, and decides whether the answer is a hallucination.
-4. Aggregate the metric (e.g. **hallucination rate**), then **dashboard**, then **alert**.
-- Run **multiple such evaluators** in parallel.
+- **Dashboards** show **aggregates** over time windows. A single slow chat doesn't matter; a trend does.
+- *Example:* a course launch brings 500 users at once, latency climbs, so you add servers (e.g. more AWS EC2 instances and load balancers).
+- **Alerts:** nobody watches graphs 24/7. Alert when a metric crosses a threshold (e.g. latency > 4 s).
 
-### LangSmith evaluators (templates seen in the demo)
+### Pipeline B: computed signals
+
+```mermaid
+flowchart LR
+    L[(All logs, e.g. 50,000/day)] --> S[Sample, e.g. 1,000]
+    S --> J[Reference-free LLM-as-a-judge evaluator]
+    J --> M[Metric, e.g. hallucination rate]
+    M --> D[Dashboard]
+    D --> A[Alerts]
+```
+
+**Why sample?** Running a judge LLM on every conversation can **more than double** your LLM bill.
+
+**Random vs stratified sampling:**
+- **Random**: pick 1,000 conversations at random.
+- **Stratified (better)**: first **split conversations into groups**, then **sample more from risky groups**:
+  - thumbs-down conversations
+  - conversations that ended abruptly
+  - escalations ("talk to a human")
+  - repeated or rephrased questions (the user wasn't satisfied)
+  - money topics (refunds, fees, admissions)
+  - *fewer* from thumbs-up conversations (probably fine)
+- Putting conversations into groups may itself need a small classifier model.
+
+> 💡 **Analogy:** a food inspector doesn't test every meal. They test more often at the stalls with complaints.
+
+🔎 *Beyond the lecture: how LangSmith does it.* In LangSmith, **automation rules** have a **filter** (which runs qualify), a **sampling rate** (what fraction of the filtered runs to process, e.g. 10% to control cost) and an **action** (e.g. run an LLM-as-judge evaluator). The API takes `sampling_rate` as a decimal from 0 to 1. [LangSmith docs: online evaluations](https://docs.langchain.com/langsmith/online-evaluations-llm-as-judge), [rules](https://docs.langchain.com/langsmith/rules). **Filter + sample** is a simple way to do stratified sampling: e.g. a rule for "thumbs-down runs at 100%" and another for "all runs at 5%".
+
+### LangSmith evaluator templates seen in the demo
 - **Security:** PII leakage, prompt injection, code injection
 - **Safety:** toxicity, bias/fairness
-- **Quality:** hallucination, correctness, assertions, conciseness, code checker
-- **Trajectory** (for agents), plus image- and voice-based variants
-- Most are **LLM-as-a-judge**. Configure the name, application, judge model (OpenAI/Claude/…), API key, temperature, the **prompt/rubric** and the output format.
-- **Run on tracing → online evaluator. Run on a dataset → offline evaluator.** LangSmith supports both, plus Datasets & Experiments for offline runs.
+- **Quality:** hallucination, correctness, conciseness, code checker
+- **Agents:** trajectory (did the agent take sensible steps?)
+- Most are **LLM-as-a-judge**. You configure the judge model, API key, temperature, prompt/rubric and output format.
+- **Run on tracing → online evaluator. Run on a dataset → offline evaluator.**
 
-## Closing the loop: the self-improving cycle
-- In LangSmith, a bad production trace can go **"Add to dataset"** into the offline golden set, or into an **annotation queue** to mark what went right or wrong.
-- Cycle: offline eval → deploy → production failures → add to offline dataset → re-run offline evals → redeploy → …
+---
 
-## Q&A
-- **"Dashboard shows faithfulness 0.87, latency 3 s: is the bot good?"** Compare against a **baseline**, usually from offline evaluation. A baseline of 0.85 makes 0.87 fine. A drop to 0.75 in the last 24 h is concerning, so alert and improve.
-- **"Offline score went from 92 to 99: good for production?"** It depends which metric, and whether others **regressed**. Improving one metric must not lower the others.
+## 7. Closing the loop: the self-improving cycle
 
-## Coming next
-Benchmarks (model-level evals) for one or two sessions, then application evals in depth: building golden datasets and running offline and online evals using **LangSmith**, **DeepEval** and **RAGAS**.
+```mermaid
+flowchart LR
+    A[Offline eval] --> B[Deploy]
+    B --> C[Production traffic]
+    C --> D[Failures found online]
+    D --> E["Add to dataset (with corrected answer)"]
+    E --> A
+```
+
+In LangSmith, a bad trace can be sent to a dataset with **"Add to dataset"**, or to an **annotation queue** where a human marks what went right or wrong.
+
+---
+
+## 8. Q&A from the lecture
+
+**"Dashboard shows faithfulness 0.87 and latency 3 s. Is the bot good?"**
+Compare against a **baseline**, usually taken from offline evaluation. With a baseline of 0.85, 0.87 is fine. A drop to 0.75 in the last 24 hours is a warning: alert and fix.
+
+**"Offline score rose from 92 to 99. Is that good for production?"**
+It depends **which metric**, and whether **other metrics dropped**. One metric improving at the expense of others is a regression.
+
+---
+
+## 9. Quick revision
+- **Offline** = before deploy, golden data, correctness, gating, regression testing.
+- **Online** = after deploy, live data, no answer key, normality, drift detection.
+- Online pipeline: **log → (sample → evaluate) → dashboard → alert**.
+- **Stratified sampling** focuses evaluation money on risky conversations.
+- Production failures are fed back into the offline dataset.
+
+### Self-test
+1. Why can't you measure correctness online for the UPSC grader?
+2. Give one captured and one computed signal.
+3. Why is stratified sampling better than random sampling for catching hallucinations?
+
+<details><summary>Answers</summary>
+
+1. There's no human-graded reference for the new answers.
+2. Captured: latency or thumbs-down. Computed: faithfulness or toxicity.
+3. It concentrates the samples in conversations most likely to contain problems (thumbs-down, escalations, money topics), so you find more failures for the same cost.
+</details>

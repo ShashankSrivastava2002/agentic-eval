@@ -1,6 +1,12 @@
 # LLM Evals: Study Notes (CampusX playlist)
 
-Notes made **only from the video transcripts** in `../transcripts-en/` (English translations of the original Hindi captions). One file per video.
+One file per video, built from the transcripts in `../transcripts-en/` (English translations of the original Hindi captions).
+
+- **Notes 01, 02, 07–11** use only the transcript.
+- **Notes 03–06 and 12–19** are expanded study notes: plain-language explanations, worked examples, Mermaid diagrams, self-tests, and verified outside research.
+  - 🔎 **Beyond the lecture**: extra material from research or documentation
+  - ✏️ **Correction / clarification**: places where the lecture was imprecise
+  - Mermaid diagrams render on GitHub, in Obsidian, and in VS Code with a Mermaid extension.
 
 ## Part 1: Foundations
 | # | Note | Key ideas |
@@ -32,3 +38,21 @@ Notes made **only from the video transcripts** in `../transcripts-en/` (English 
 | 17 | [Ops evals](17-rag-operational-evals-latency-cost-reliability.md) | P50/P95/P99, TTFT, cost per query, reliability |
 | 18 | [Regression testing](18-rag-regression-testing.md) | Baseline vs candidate; metric registry (direction + 2σ noise); promote/review/block |
 | 19 | [Online evals](19-online-rag-evaluation-langsmith.md) | LangSmith tracing, dashboards, alerts; same evaluators offline and online |
+
+## Key corrections made to the lecture material
+1. **Contextual precision (note 13):** DeepEval averages precision **only at the positions of relevant chunks**, then divides by the number of relevant chunks. The lecture averaged over all positions. Both reward ranking relevant chunks high, but the scores differ.
+2. **G-Eval `strict_mode` (note 15):** in DeepEval it forces a **binary 0/1 score** (perfect or fail). It doesn't toggle probability weighting.
+3. **G-Eval paper (note 15):** GPT-4 didn't expose token probabilities, so the paper **estimated them by sampling 20 responses**. G-Eval is far more stable than naive judging but **not fully deterministic**.
+4. **Toxicity score direction (note 16):** the lecture used toxic ÷ total (lower is better). Current DeepEval docs use **non-toxic ÷ total (higher is safer)**. Check your installed version.
+5. **Sampling example (note 6):** the intended example is sampling ~1,000 out of **50,000** daily conversations.
+6. **Noise threshold (note 18):** the demo used only 2 baseline runs. Use 5–10+ for a meaningful standard deviation.
+
+## Main external sources
+- G-Eval paper: Liu et al. 2023, [arXiv:2303.16634](https://arxiv.org/abs/2303.16634)
+- LLM-as-a-judge biases: Zheng et al. 2023, [arXiv:2306.05685](https://arxiv.org/abs/2306.05685)
+- Lost in the Middle: Liu et al. 2023, [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)
+- Spotlighting (indirect prompt-injection defence): Hines et al. 2024, [arXiv:2403.14720](https://arxiv.org/abs/2403.14720)
+- DeepEval metric docs: [faithfulness](https://deepeval.com/docs/metrics-faithfulness), [answer relevancy](https://deepeval.com/docs/metrics-answer-relevancy), [contextual precision](https://deepeval.com/docs/metrics-contextual-precision), [contextual recall](https://deepeval.com/docs/metrics-contextual-recall), [contextual relevancy](https://deepeval.com/docs/metrics-contextual-relevancy), [G-Eval](https://deepeval.com/docs/metrics-llm-evals), [toxicity](https://deepeval.com/docs/metrics-toxicity), [PII leakage](https://deepeval.com/docs/metrics-pii-leakage), [RAG triad guide](https://deepeval.com/guides/guides-rag-triad)
+- OWASP Top 10 for LLM Applications 2025: [announcement](https://genai.owasp.org/2024/11/17/owasp-reveals-2025-top-10-risks-for-llms-new-sponsorship-program/)
+- LangSmith online evaluations: [LLM-as-judge](https://docs.langchain.com/langsmith/online-evaluations-llm-as-judge), [rules](https://docs.langchain.com/langsmith/rules)
+- Prompt caching: [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching), [Anthropic](https://docs.claude.com/en/docs/build-with-claude/prompt-caching)

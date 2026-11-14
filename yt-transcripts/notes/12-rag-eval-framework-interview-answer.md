@@ -1,113 +1,240 @@
-# 12 — "How Do You Evaluate Your RAG App?": The RAG Eval Framework
+# Lecture 12 — The RAG Evaluation Framework ("How do you evaluate your RAG app?")
 
-> Source: [How to Answer "How Do You Evaluate Your RAG App?" in GenAI Interviews](https://www.youtube.com/watch?v=4zn-gSckVTQ) (CampusX). Notes are based only on the video transcript.
-
-## TL;DR
-Don't answer with a list of metrics. Answer with a **framework**:
-1. Build an **eval suite** at **3 levels**: **component** (retriever, generator), **pipeline** (RAG triad), **application** (quality, safety, ops).
-2. Use it for **regression testing**, at 3 maturity levels: manual, experiment tracking, CI gating.
-3. **Deploy**, then run **online evals** (capture, compute, drift, alerts) with a **self-improving loop** back into offline datasets.
-4. Tooling: **DeepEval** (pytest-style).
+> **Source lecture:** [How to Answer "How Do You Evaluate Your RAG App?" in GenAI Interviews](https://www.youtube.com/watch?v=4zn-gSckVTQ) (CampusX)
+> **What this note adds:** a beginner's RAG primer, every metric defined in plain words with DeepEval's official formulas, the testing-pyramid analogy, a RAGAS vs DeepEval comparison, and a polished interview answer (🔎 *Beyond the lecture*).
 
 ---
 
-## Where we are in the course
-- **Done:** fundamentals (why/what, reference-based vs reference-free, offline vs online, model vs application evals), then **model evals** (benchmarks plus custom evals).
-- **Now:** **application evals**.
-  - LLM app types: simple chatbots, **RAG chatbots**, **agents**, multimodal apps (e.g. image generators), fixed-schema output (e.g. the Zomato email classifier).
-  - The course covers **RAG** and **agents**: they're the most common production patterns, and the easier types follow from them.
-- "How do you evaluate your RAG chatbot?" comes up in roughly **8 of 10 GenAI interviews**, and most candidates can't answer in a structured way.
+## 1. Why this lecture matters
+"How do you evaluate your RAG chatbot?" comes up in roughly **8 out of 10 GenAI interviews** (the instructor's estimate). Most candidates either don't know, or list 3–4 metric names ("recall, precision, answer relevance…").
 
-## The case study: CampusX Doubt Solver
-- A simple **RAG chatbot** over the **transcripts of every lecture** in this LLM evals course. Students ask doubts about the playlist.
-- It's deliberately simple, to focus on **how to evaluate**, not on fancy RAG.
-- RAG recap: query, **retriever** (embedding model + vector DB, top-k docs), then question + context go to the **generator** (LLM), which produces the answer.
-- **Build and evaluate together**, like software testing at the function and feature level.
+> A **framework** answer (levels → metrics → regression testing → online monitoring) shows real depth. This lecture gives you that framework; lectures 13–19 implement it.
 
-## The eval suite: 3 levels, 9 steps
+### Course position
+- ✅ Fundamentals (lectures 1–6)
+- ✅ Model evals (benchmarks, leaderboards, custom model evals)
+- ▶️ **Application evals**, starting here with **RAG**, then **agents**
 
-### Level 1: component level
+LLM app types: simple chatbots, **RAG chatbots**, **agents**, multimodal apps (e.g. image generators), fixed-schema output apps (e.g. an email classifier). The course covers **RAG and agents**: they're the most common in production, and the simpler types follow from them.
 
-| Step | Build / evaluate | Metrics |
+---
+
+## 2. RAG in plain language
+
+> **RAG (Retrieval-Augmented Generation)** = "look it up, then answer". The LLM is given relevant pieces of *your* documents so it answers from them, not just from memory.
+
+```mermaid
+flowchart LR
+    subgraph Indexing[Done once, offline]
+        DOC[Lecture transcripts] --> CH[Split into chunks]
+        CH --> EM[Embedding model turns text into vectors]
+        EM --> VDB[(Vector database)]
+    end
+    subgraph Answering[Every question]
+        Q[Student question] --> QE[Embed question]
+        QE --> S[Find the k most similar chunks]
+        VDB --> S
+        S --> CTX[Retrieved context]
+        CTX --> GEN[Generator LLM]
+        Q --> GEN
+        GEN --> ANS[Answer + citation]
+    end
+```
+
+**Glossary**
+| Term | Simple meaning |
+|---|---|
+| Chunk | A small piece of a document |
+| Embedding | A list of numbers representing the meaning of text; similar meanings give similar numbers |
+| Vector database | A database optimised to find "nearest" embeddings quickly (e.g. Chroma, Pinecone) |
+| Retriever | The component that fetches the top-k relevant chunks |
+| Reranker | An optional model that re-orders the retrieved chunks by relevance |
+| Generator | The LLM that writes the answer using the question + chunks |
+| Context | The chunks given to the generator |
+| Hallucination | The LLM states something that isn't supported (made up) |
+
+### The case study: CampusX Doubt Solver
+- A simple **RAG chatbot** over the **transcripts of every lecture** in this course. Students ask doubts and it answers, **citing which session** covered the topic.
+- It's deliberately simple, so the focus stays on **how to evaluate**.
+- **Build and evaluate together**, just like software: test each function as you write it.
+
+---
+
+## 3. The eval suite: 3 levels, 9 steps
+
+```mermaid
+flowchart TD
+    subgraph L1[Level 1: Component]
+        S1[1. Build retriever] --> S2[2. Eval retriever: contextual recall + precision]
+        S2 --> S3[3. Build generator] --> S4[4. Eval generator in isolation: faithfulness, answer relevancy, citation accuracy]
+    end
+    subgraph L2[Level 2: Pipeline]
+        S5[5. Connect retriever + generator] --> S6[6. RAG triad: context relevance, faithfulness, answer relevance]
+    end
+    subgraph L3[Level 3: Application]
+        S7[7. Quality: correctness, completeness, style]
+        S8[8. Safety: toxicity, PII leakage, jailbreak/scope]
+        S9[9. Ops: latency, cost, tokens]
+    end
+    S4 --> S5
+    S6 --> S7 --> S8 --> S9
+```
+
+### Level 1: Component
+
+**Retriever** (does it fetch the right chunks?)
+
+| Metric | Plain meaning | Needs a reference? |
 |---|---|---|
-| 1 | **Build the retriever**: load docs, chunk, embed, store, retrieve | |
-| 2 | **Evaluate the retriever in isolation** | **Recall** (how many of the correct docs were fetched), **precision** (how many fetched docs were useful) |
-| 3 | **Build the generator** (LLM: question + context → answer) | |
-| 4 | **Evaluate the generator in isolation**: feed it **manually provided** questions and context (golden-style), *not* the retriever's output | **Faithfulness** (only from the context, no hallucination), **answer relevance**, **citation accuracy** (e.g. cite which session and transcript link it came from) |
+| **(Contextual) recall** | Of the information *needed* to answer, how much was retrieved? | ✅ Yes (an ideal answer) |
+| **(Contextual) precision** | Of the chunks retrieved, how many are useful, and are the useful ones ranked at the top? | ✅ Yes |
 
-### Level 2: pipeline level
+**Generator, tested in isolation**: feed it **hand-picked correct context** (not the retriever's output), so retriever mistakes don't contaminate the result.
 
-| Step | What | Metrics |
-|---|---|---|
-| 5 | **Build the RAG pipeline**: connect retriever and generator | |
-| 6 | **Evaluate the pipeline** with the **RAG triad** | See below |
+| Metric | Plain meaning |
+|---|---|
+| **Faithfulness** | Does the answer stick to the given context (no made-up facts)? |
+| **Answer relevancy** | Does the answer actually address the question? |
+| **Citation accuracy** | Does it cite the correct source (e.g. "Session 6, link…")? |
 
-**The RAG triad**: three entities (**question**, **context**, **answer**) give three pairwise metrics:
+> 💡 **Why isolate?** If you test the generator with the retriever attached and the answer is bad, you can't tell *which* part is to blame. It's like testing a car's engine on a test bench instead of on a bumpy road.
 
-| Pair | Metric | Checks |
+### Level 2: Pipeline, the RAG triad
+Three things exist in every RAG interaction: the **question**, the **context** and the **answer**. Each pair gives one metric.
+
+```mermaid
+flowchart TB
+    Q((Question)) ---|Context relevance| C((Context))
+    C ---|Faithfulness / groundedness| A((Answer))
+    A ---|Answer relevance| Q
+```
+
+| Pair | Metric | Question it answers |
 |---|---|---|
 | Question ↔ context | **Context relevance** | Is the retrieved context relevant to the question? |
-| Answer ↔ context | **Faithfulness** | Is the answer grounded in the context? |
+| Context ↔ answer | **Faithfulness** | Is the answer grounded in the context? |
 | Answer ↔ question | **Answer relevance** | Does the answer address the question? |
 
-### Level 3: application level
+If all three are high, the pipeline is healthy. *(The "RAG triad" term was popularised by the TruLens project; DeepEval has a guide on it: [Using the RAG Triad](https://deepeval.com/guides/guides-rag-triad).)*
 
-| Step | Category | Metrics |
+### Level 3: Application
+
+| Step | Category | Metrics | Plain meaning |
+|---|---|---|---|
+| 7 | **Quality** | **Correctness** | Is the answer factually right? |
+| | | **Completeness** | Are all parts of a multi-part question answered? |
+| | | **Style** | Does it explain like a CampusX teacher (intuitive, conversational)? |
+| 8 | **Safety** | **Toxicity** | No rude, insulting or demotivating language |
+| | | **PII leakage** | Never reveals personal data |
+| | | **Jailbreak / scope** | Can't be tricked into other tasks or rule-breaking |
+| 9 | **Operations** | **Latency, cost per query, tokens** | Fast and affordable enough? |
+
+> All of these together = the **eval suite**. Some evals need **golden datasets** (reference-based); some don't (reference-free).
+
+🔎 *Beyond the lecture: official DeepEval formulas* (all are LLM-judged ratios between 0 and 1)
+| Metric | Formula (from [DeepEval docs](https://deepeval.com/docs/metrics-faithfulness)) |
+|---|---|
+| Faithfulness | truthful claims ÷ total claims in the answer |
+| Answer relevancy | relevant statements ÷ total statements in the answer |
+| Contextual relevancy | relevant statements ÷ total statements in the retrieved context |
+| Contextual recall | expected-answer statements attributable to the retrieved context ÷ total expected-answer statements |
+| Contextual precision | rank-weighted precision over the relevant chunks (see lecture 13) |
+
+---
+
+## 4. Tooling: DeepEval
+Instead of hand-writing evaluation code (as in the custom model-eval lecture), the course uses **DeepEval**, an open-source LLM evaluation library.
+- **Built-in RAG metrics:** answer relevancy, faithfulness, contextual precision, contextual recall, contextual relevancy.
+- **Built-in safety metrics:** toxicity, PII leakage, and more.
+- **pytest-style:** if you've written Python software tests, it feels familiar.
+
+**Why DeepEval rather than RAGAS?** Both work.
+1. RAGAS was already covered in CampusX's Advanced RAG course.
+2. DeepEval is **broader**: agents, multi-turn chat, non-LLM and image apps.
+
+🔎 *Beyond the lecture: comparison*
+| | DeepEval | RAGAS |
 |---|---|---|
-| 7 | **Quality** | **Correctness**. **Completeness** (all parts of a multi-part question answered). **Style** (matches the CampusX teachers' explanation style). |
-| 8 | **Safety** | **Toxicity**, **PII leakage**, **jailbreak** resistance |
-| 9 | **Operations** | **Latency**, **cost per query**, **tokens** |
+| Focus | General LLM testing (RAG, agents, chat, safety, custom G-Eval) | RAG-centric metrics, synthetic test generation |
+| Style | pytest-like test cases | Dataset + `evaluate()` |
+| Companion platform | Confident AI (dashboards, tracking) | Integrates with several observability tools |
 
-> All of the above together = the **eval suite**. Some evals need **golden datasets**; some don't.
+The concepts transfer between libraries; the names and exact formulas differ slightly.
 
-## Tooling: DeepEval
-- Instead of hand-writing all the eval code (as in the custom model eval session), use **DeepEval**.
-  - RAG metrics are built in: answer relevancy, faithfulness, contextual precision, contextual recall, contextual relevancy.
-  - Safety metrics are built in: toxicity, PII leakage.
-- **pytest-based syntax**, familiar to anyone who has done software testing.
-- Why DeepEval over RAGAS (both work):
-  1. RAGAS was already covered in the Advanced RAG course.
-  2. DeepEval is **broader**: agents, multi-turn chatbots, non-LLM and image apps. It has higher adoption and may become the standard.
+---
 
-## Regression testing
-> **Regression testing** = running your **whole eval suite** on a new version to check it's **not objectively worse** than the previous one. It produces a report of which metrics went up or down, which drives the deploy decision.
+## 5. Regression testing (overview; details in lecture 18)
+> **Regression testing** = running the **entire eval suite** on a new version to make sure it is **not objectively worse** than the previous version.
 
 ### Project layout
 ```
 project/
-├── src/          # retriever.py, generator.py, rag_pipeline.py, (FastAPI API, Streamlit UI)
-├── evals/        # eval_retriever.py, eval_generator.py, eval_pipeline.py,
-│                 # eval_application.py, eval_safety.py, eval_ops.py   ← the eval suite
-└── run_evals.py  # runs every eval and generates a comparison report
+├── src/          retriever.py, generator.py, rag_pipeline.py, (FastAPI, Streamlit UI)
+├── evals/        eval_retriever.py, eval_generator.py, eval_pipeline.py,
+│                 eval_application.py, eval_safety.py, eval_ops.py   ← the eval suite
+└── run_evals.py  runs everything, writes a comparison report
 ```
 
 ### Three maturity levels
 
-| Level | How | Tools |
+| Level | How it works | Tools |
 |---|---|---|
-| **1. Basic** | Run `run_evals.py`, get **baseline** numbers, re-run after changes, compare manually | — |
-| **2. Experiment tracking + dashboards** | Log **config** (chunk size, overlap, temperature, embedding settings) and **metrics** per run (e.g. recall 0.82, precision 0.68), then compare runs on a dashboard | **MLflow**, Confident AI (from the makers of DeepEval), Weights & Biases |
-| **3. CI gating** | On every `git push` (e.g. a chunk-size change), **CI** (GitHub Actions) re-runs the suite and compares with the **baseline** against a threshold (e.g. not more than 3 points lower). Worse means **block the deployment**. Better means **deploy and update the baseline**. | GitHub Actions (CI/CD is covered in the LLMOps course) |
+| **1. Basic** | Run `run_evals.py`, save **baseline** numbers, re-run after changes, compare by hand | — |
+| **2. Experiment tracking** | Log the **configuration** (chunk size, overlap, temperature, embedding model) and the **metrics** for every run, then compare on a dashboard | MLflow, Confident AI, Weights & Biases |
+| **3. CI gating** | Every `git push` triggers the suite automatically and compares with the baseline against a threshold (e.g. no metric drops more than 3 points). **Worse → block. Better → deploy and update the baseline.** | GitHub Actions |
 
-> No standard LLM experiment-tracking tool exists yet (unlike MLflow for ML). **Focus on concepts, not tools.**
+```mermaid
+flowchart LR
+    P[git push: chunk size changed] --> CI[GitHub Actions runs eval suite]
+    CI --> C{Every metric within threshold of baseline?}
+    C -->|Yes| D[Deploy + new baseline]
+    C -->|No| B[Block deployment, notify]
+```
 
-## After deployment: online evals
-- **Capture** (via tracing/observability): latency, cost, tokens, thumbs up/down. Tools: **LangSmith**, **Langfuse**, Confident AI.
-- **Compute** online: faithfulness, answer relevance, correctness (the same metrics as offline).
-- **Drift detection**: e.g. faithfulness trending down over the last 8 hours triggers an **alert**, then a fix.
-- **Self-improving loop**: misbehaving chats go into the **offline golden datasets**, which get richer over time.
+> No single LLM experiment-tracking tool is the standard yet (unlike MLflow for classic ML). **Learn the concepts, not just the tools.**
 
-## The interview answer (template)
-> "I'd build an **eval suite** and test at **three levels**:
-> **Component**: retriever (recall, precision) and generator in isolation (faithfulness, answer relevance, citation accuracy).
-> **Pipeline**: the **RAG triad** (context relevance, faithfulness, answer relevance).
-> **Application**: quality (correctness, completeness, style), **safety** (toxicity, PII, jailbreak) and **ops** (latency, cost, tokens).
-> I'd use the suite for **regression testing** (basic, then experiment tracking, then CI/CD gating against a baseline), **deploy**, then run **online evals** (captured and computed signals, drift detection, alerts), and feed production failures back into my offline golden datasets."
+---
 
-Listing just 3–4 metrics (recall, precision, answer relevance) is the common weak answer. A **framework** answer shows depth.
+## 6. After deployment: online evals (overview; details in lecture 19)
+- **Capture** via tracing/observability: latency, cost, tokens, thumbs up/down. Tools: **LangSmith**, **Langfuse**, Confident AI.
+- **Compute online** with *reference-free* metrics: faithfulness, answer relevancy, etc.
+- **Drift detection**: e.g. faithfulness trending down over the last 8 hours triggers an alert and a fix.
+- **Self-improving loop**: bad production chats go into the offline golden datasets.
 
-## Roadmap for the next sessions
-1. Component level: build and evaluate the retriever and generator (first use of DeepEval)
-2. Pipeline level: the RAG triad
-3. Application level: quality, safety, ops
-4. Regression testing and online evals
+---
+
+## 7. The interview answer (memorise the structure)
+
+> "I'd build an **eval suite** that tests the app at **three levels**.
+> **Component level:** the retriever, using contextual recall and precision, and the generator *in isolation*, using faithfulness, answer relevancy and citation accuracy.
+> **Pipeline level:** the **RAG triad**: context relevance, faithfulness and answer relevance.
+> **Application level:** quality (correctness, completeness, style), **safety** (toxicity, PII leakage, jailbreak/scope) and **operations** (latency, cost, tokens).
+> I'd use the suite for **regression testing** on every change. That can be manual, use experiment tracking, or be **CI-gated against a baseline**. After deploying, I'd run **online evals**: tracing, reference-free metrics on sampled traffic, drift detection and alerts. I'd feed production failures back into my golden datasets."
+
+**Weak answer:** "We check recall, precision and answer relevance."
+**Strong answer:** levels → metrics → regression → online → feedback loop.
+
+---
+
+## 8. Roadmap of the following lectures
+| Lecture | Topic |
+|---|---|
+| 13 | Retriever: contextual recall and precision (first use of DeepEval) |
+| 14 | Generator + RAG triad |
+| 15 | Application quality with G-Eval (correctness, completeness, style) |
+| 16 | Safety evals |
+| 17 | Operational evals |
+| 18 | Regression testing |
+| 19 | Online evals with LangSmith |
+
+### Self-test
+1. Why test the generator with hand-picked context rather than the retriever's output?
+2. Name the three RAG-triad metrics and the pair each one connects.
+3. What is the difference between maturity levels 2 and 3 of regression testing?
+
+<details><summary>Answers</summary>
+
+1. To isolate it. Otherwise retriever mistakes get blamed on the generator.
+2. Context relevance (question–context), faithfulness (context–answer), answer relevance (answer–question).
+3. Level 2 logs and compares runs, but a human decides. Level 3 automates the comparison in CI and blocks or allows deployment.
+</details>
